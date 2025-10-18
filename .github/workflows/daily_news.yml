@@ -27,4 +27,5 @@ jobs:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          python news_digest.py
+          ls -la
+          python3 news_digest.py
