@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-汽车公关新闻摘要系统 - 完整版
-支持Gemini AI智能摘要
+汽车公关新闻摘要系统 - 优化版
+使用官方RSS源，更稳定可靠
 """
 
 import os
@@ -11,21 +11,22 @@ import requests
 import feedparser
 from datetime import datetime, timedelta
 from collections import defaultdict
+import time
 
 # ==================== 配置区 ====================
 
-# 媒体RSS源配置
+# 媒体RSS源配置（使用官方源）
 RSS_SOURCES = {
-    '人民日报': 'https://rsshub.app/people/xjpjh',
-    '新华社': 'https://rsshub.app/xinhua/news',
-    '央视新闻': 'https://rsshub.app/cctv/24',
-    '36氪': 'https://rsshub.app/36kr/news/latest',
-    '钛媒体': 'https://rsshub.app/tmtpost/news',
-    '虎嗅': 'https://rsshub.app/huxiu/index',
-    '雷锋网': 'https://rsshub.app/leiphone/newsflash',
-    '汽车之家': 'https://rsshub.app/autohome/news',
-    '懂车帝': 'https://rsshub.app/dongchedi/latest',
-    '电车汇': 'https://rsshub.app/diancheguancha/news',
+    '新华社': 'http://www.news.cn/tech/news_tech.xml',
+    '央视新闻': 'https://news.cctv.com/rss/china.xml',
+    '36氪': 'https://36kr.com/feed',
+    '虎嗅': 'https://www.huxiu.com/rss/0.xml',
+    '汽车之家': 'https://www.autohome.com.cn/rss/',
+    '新浪科技': 'https://tech.sina.com.cn/rss/roll.xml',
+    '网易科技': 'https://tech.163.com/special/00097UHL/tech_datalist.xml',
+    '腾讯科技': 'https://tech.qq.com/web/rss_web.xml',
+    '凤凰科技': 'https://tech.ifeng.com/listpage/11574/0/1/rss.xml',
+    'IT之家': 'https://www.ithome.com/rss/',
 }
 
 # 关键词分类配置
@@ -38,7 +39,7 @@ KEYWORDS = {
     '🤖 AI科技': [
         '人工智能', 'AI', '大模型', 'ChatGPT', '芯片', '智能驾驶', 
         '激光雷达', '车联网', '自动化', '算力', '英伟达', '华为鸿蒙',
-        '智能座舱', '语音助手'
+        '智能座舱', '语音助手', 'GPU'
     ],
     '📊 政策法规': [
         '碳中和', '补贴', '政策', '标准', '法规', '交通', 
@@ -58,44 +59,76 @@ NEGATIVE_KEYWORDS = ['召回', '事故', '起火', '维权', '投诉', '质量�
 
 # ==================== 核心功能函数 ====================
 
-def fetch_rss_news(hours=24):
+def fetch_rss_news(hours=48):
     """采集所有RSS源的新闻"""
     news_list = []
     cutoff_time = datetime.now() - timedelta(hours=hours)
     
     print(f"📥 开始采集新闻（时间范围：过去{hours}小时）...")
     
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+    
     for source_name, rss_url in RSS_SOURCES.items():
         try:
-            print(f"  - 正在采集: {source_name}")
-            feed = feedparser.parse(rss_url)
+            print(f"  - 正在采集: {source_name} ({rss_url})")
             
-            for entry in feed.entries[:20]:
+            # 添加超时和重试机制
+            response = requests.get(rss_url, headers=headers, timeout=15)
+            
+            if response.status_code != 200:
+                print(f"    ⚠️ HTTP状态码: {response.status_code}")
+                continue
+            
+            feed = feedparser.parse(response.content)
+            
+            if not feed.entries:
+                print(f"    ⚠️ 未获取到任何条目")
+                continue
+            
+            print(f"    ✓ 获取到 {len(feed.entries)} 条原始数据")
+            
+            for entry in feed.entries[:30]:
+                # 解析发布时间
                 if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                    pub_time = datetime(*entry.published_parsed[:6])
+                    try:
+                        pub_time = datetime(*entry.published_parsed[:6])
+                    except:
+                        pub_time = datetime.now()
                 else:
                     pub_time = datetime.now()
                 
+                # 只保留最近N小时的新闻
                 if pub_time < cutoff_time:
                     continue
                 
-                summary_text = entry.get('summary', '')
+                # 清理摘要
+                summary_text = entry.get('summary', entry.get('description', ''))
                 summary_text = re.sub(r'<[^>]+>', '', summary_text)
                 summary_text = summary_text.strip()[:300]
                 
+                # 获取标题
+                title = entry.get('title', '').strip()
+                if not title:
+                    continue
+                
                 news_item = {
                     'source': source_name,
-                    'title': entry.title.strip(),
-                    'link': entry.link,
+                    'title': title,
+                    'link': entry.get('link', ''),
                     'summary': summary_text,
                     'pub_time': pub_time,
                 }
                 news_list.append(news_item)
                 
+        except requests.Timeout:
+            print(f"    ⚠️ 采集超时")
         except Exception as e:
-            print(f"    ⚠️ 采集 {source_name} 失败: {e}")
+            print(f"    ⚠️ 采集失败: {str(e)[:100]}")
             continue
     
+    # 按时间倒序排列
     news_list.sort(key=lambda x: x['pub_time'], reverse=True)
     print(f"✅ 采集完成，共获取 {len(news_list)} 条新闻\n")
     return news_list
@@ -122,9 +155,11 @@ def classify_news(news_list):
         if matched_category:
             categorized[matched_category].append(news)
     
+    # 每个分类最多保留10条
     for category in categorized:
         categorized[category] = categorized[category][:10]
     
+    # 打印分类统计
     for category, items in categorized.items():
         print(f"  - {category}: {len(items)} 条")
     
@@ -136,6 +171,7 @@ def generate_ai_summary(news_item):
     """使用Gemini API生成AI摘要"""
     api_key = os.environ.get('GEMINI_API_KEY')
     
+    # 如果没有API密钥，使用简单摘要
     if not api_key:
         return generate_simple_summary(news_item['summary'], 50)
     
@@ -182,11 +218,9 @@ def generate_ai_summary(news_item):
             
             return summary
         else:
-            print(f"    ⚠️ AI摘要失败: HTTP {response.status_code}")
             return generate_simple_summary(news_item['summary'], 50)
             
     except Exception as e:
-        print(f"    ⚠️ AI摘要异常: {e}")
         return generate_simple_summary(news_item['summary'], 50)
 
 
@@ -299,19 +333,24 @@ def main():
     print(f"⏰ 执行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60 + "\n")
     
-    news_list = fetch_rss_news(hours=24)
+    # 采集新闻（扩大到48小时）
+    news_list = fetch_rss_news(hours=48)
     
     if not news_list:
         print("⚠️ 未采集到新闻，任务结束")
         return
     
+    # 分类过滤
     categorized_news = classify_news(news_list)
     
     if not categorized_news:
         print("⚠️ 没有符合条件的新闻，任务结束")
         return
     
+    # 构建消息
     message = build_feishu_message(categorized_news)
+    
+    # 发送到飞书
     success = send_to_feishu(message)
     
     print("=" * 60)
